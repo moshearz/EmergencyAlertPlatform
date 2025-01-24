@@ -16,5 +16,5 @@ This project implements an Emergency Service Platform using the STOMP protocol.
 2. Run the client: `./StompESClient`.
 
 ## Contributors
-- Your Name
-- Your Collaborator's Name
+- Moshe Arzuan
+- Alon Ganot
