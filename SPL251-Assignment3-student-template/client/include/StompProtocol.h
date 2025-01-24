@@ -10,9 +10,11 @@
 class StompProtocol
 {
 private:
+    ConnectionHandler &connectionHandler;   //ref to connection Handler
     std::map<std::string, std::string> subscriptions; //Save subscriptions by channels
+    int receiptCounter; // Unique counter for receipts
 public:
-    StompProtocol();
+    StompProtocol(ConnectionHandler &handler);
 
     std::string createConnectFrame(const std::string &host, const std::string &username, const std::string &password);
     std::string createSendFrame(const std::string &destination, const std::string &message);

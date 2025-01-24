@@ -2,7 +2,7 @@
 #include <iostream>
 #include <sstream>
 
-StompProtocol::StompProtocol() : subscriptions() {}
+StompProtocol::StompProtocol(ConnectionHandler &handler) : subscriptions(), connectionHandler(handler), receiptCounter(0) {}
 
 std::string StompProtocol::createConnectFrame(const std::string &host, const std::string &username, const std::string &password){
     return "CONNECT\n"
@@ -21,10 +21,10 @@ std::string StompProtocol::createSendFrame(const std::string &destination, const
 
 std::string StompProtocol::createSubscribeFrame(const std::string &destination, const std::string &id)
 {
-    subscriptions[destination] = id;
     return "SUBSCRIBE\n"
            "destination:" + destination + "\n"
-           "id:" + id + "\n\n\0";
+           "id:" + id + "\n"
+           "receipt:" + std::to_string(++receiptCounter) + "\n\n\0";
 }
 
 std::string StompProtocol::createUnsubscribeFrame(const std::string &id)
