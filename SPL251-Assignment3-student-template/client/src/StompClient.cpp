@@ -62,7 +62,7 @@ int main(int argc, char *argv[]) {
             std::cout << "Message from server:\n" << msg << std::endl;
 
             if (msg.find("DISCONNECT") == 0) {
-                std::cerr << "Received DISCONNECT frame. Terminating client..." << std::endl;
+                std::cerr << "Received DISCONNECT or ERROR frame. Terminating client..." << std::endl;
                 std::lock_guard<std::mutex> lock(mutex);
                 shouldTerminate = true;
                 connectionHandler.close();
