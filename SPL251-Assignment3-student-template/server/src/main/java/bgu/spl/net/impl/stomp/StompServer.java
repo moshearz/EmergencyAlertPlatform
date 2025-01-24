@@ -1,13 +1,3 @@
-<<<<<<< HEAD
-package bgu.spl.net.impl.stomp;
-
-public class StompServer {
-
-    public static void main(String[] args) {
-        // TODO: implement this
-    }
-}
-=======
 package bgu.spl.net.impl.stomp;
 
 import bgu.spl.net.api.MessageEncoderDecoder;
@@ -38,4 +28,3 @@ public class StompServer {
         }
     }
 }
->>>>>>> dc50916... Implemented main server function
