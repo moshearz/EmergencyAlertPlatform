@@ -1,24 +1,22 @@
 package bgu.spl.net.srv;
 
 import bgu.spl.net.api.MessageEncoderDecoder;
-import bgu.spl.net.api.MessagingProtocol;
 import bgu.spl.net.api.StompMessagingProtocol;
+import bgu.spl.net.impl.stomp.StompFrame;
 
 import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.net.Socket;
 
-public class BlockingConnectionHandler<T> implements Runnable, ConnectionHandler<T> {
+public class BlockingConnectionHandler implements Runnable, ConnectionHandler<StompFrame> {
 
-    private final StompMessagingProtocol<T> protocol;
-    private final MessageEncoderDecoder<T> encdec;
+    private final StompMessagingProtocol<StompFrame> protocol;
+    private final MessageEncoderDecoder<StompFrame> encdec;
     private final Socket sock;
     private BufferedInputStream in;
-    private BufferedOutputStream out;
     private volatile boolean connected = true;
 
-    public BlockingConnectionHandler(Socket sock, MessageEncoderDecoder<T> reader, StompMessagingProtocol<T> protocol) {
+    public BlockingConnectionHandler(Socket sock, MessageEncoderDecoder<StompFrame> reader, StompMessagingProtocol<StompFrame> protocol) {
         this.sock = sock;
         this.encdec = reader;
         this.protocol = protocol;
@@ -30,10 +28,9 @@ public class BlockingConnectionHandler<T> implements Runnable, ConnectionHandler
             int read;
 
             in = new BufferedInputStream(sock.getInputStream());
-            out = new BufferedOutputStream(sock.getOutputStream());
-
+            
             while (!protocol.shouldTerminate() && connected && (read = in.read()) >= 0) {
-                T nextMessage = encdec.decodeNextByte((byte) read);
+                StompFrame nextMessage = encdec.decodeNextByte((byte) read);
                 //System.out.println("BlockingCH: nextMessage = " + nextMessage);
                 if (nextMessage != null) {
                     protocol.process(nextMessage);
@@ -51,11 +48,12 @@ public class BlockingConnectionHandler<T> implements Runnable, ConnectionHandler
     @Override
     public void close() throws IOException {
         connected = false;
+        
         sock.close();
     }
 
     @Override
-    public void send(T msg) {
+    public void send(StompFrame msg) {
         try {
             byte[] encodedMsg = encdec.encode(msg);
             sock.getOutputStream().write(encodedMsg);
