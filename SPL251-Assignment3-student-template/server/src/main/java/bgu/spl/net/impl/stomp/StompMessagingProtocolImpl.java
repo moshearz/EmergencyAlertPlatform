@@ -1,7 +1,8 @@
 package bgu.spl.net.impl.stomp;
 
-import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import bgu.spl.net.api.StompMessagingProtocol;
 import bgu.spl.net.srv.Connections;
@@ -10,6 +11,8 @@ public class StompMessagingProtocolImpl  implements StompMessagingProtocol<Stomp
     private int connectionId;
     private Connections<StompFrame> connections;
     private boolean shouldTerminate = false;
+    private final AtomicInteger messageIdCounter = new AtomicInteger(1);
+
 
     @Override
     public void start(int connectionId, Connections<StompFrame> connections) {
@@ -29,6 +32,9 @@ public class StompMessagingProtocolImpl  implements StompMessagingProtocol<Stomp
             case "SUBSCRIBE":
                 subscribe(frame);
                 break;
+            case "UNSUBSCRIBE":
+                unsubscribe(frame);
+                break;
             case "SEND":
                 send(frame);
                 break;
@@ -36,19 +42,36 @@ public class StompMessagingProtocolImpl  implements StompMessagingProtocol<Stomp
                 disconnect(frame);
                 break;
             default:
-                sendErrorFrame("Unknown command", "The command '" + command + "' isn't legal.");
+                sendErrorFrame(new ConcurrentHashMap<>(), "Unknown command", "The command '" + command + "' isn't legal.");
                 break;
         }
+    }
+
+    @Override
+    public boolean shouldTerminate() {
+        //System.out.println("in StompMessagingProtocolImpl: shouldTerminate");
+        return shouldTerminate;
     }
 
     private void connect(StompFrame frame) {
         System.out.println("in StompMessagingProtocolImpl: connect");
         if (frame.getHeader("accept-version") == null) {
-            sendErrorFrame("Missing 'accept-version' header", "CONNECT frame must include an 'accept-version' header");
+            sendErrorFrame(frame.getHeaders(), "Missing 'accept-version' header", "CONNECT frame must include an 'accept-version' header");
+            connections.disconnect(connectionId);
+            return;
+        }
+        if (frame.getHeader("host") == null) {
+            sendErrorFrame(frame.getHeaders(), "Missing 'host' header", "CONNECT frame must include a 'host' header");
+            connections.disconnect(connectionId);
+            return;
+        }
+        if (!connections.attemptLogin(frame.getHeader("login"), frame.getHeader("passcode"))) {
+            sendErrorFrame(frame.getHeaders(), "Wrong passcode", "Said username is already registed in server data base under a different passcode.");
+            connections.disconnect(connectionId);
             return;
         }
 
-        Map<String, String> headers = new HashMap<>();
+        Map<String, String> headers = new ConcurrentHashMap<>();
         headers.put("version", "1.2");
         StompFrame response = new StompFrame(
             "CONNECTED", 
@@ -64,15 +87,42 @@ public class StompMessagingProtocolImpl  implements StompMessagingProtocol<Stomp
         String id = frame.getHeader("id");
 
         if (topic == null) {
-            sendErrorFrame("Missing 'destination' header", "SUBSCRIBE frame must include a 'destination' header.");
+            System.out.println("missing topic");
+            sendErrorFrame(frame.getHeaders(), "Missing 'destination' header", "SUBSCRIBE frame must include a 'destination' header.");
             return;
         }
         if (id == null) {
-            sendErrorFrame("Missing 'id' header", "SUBSCRIBE frame must include an 'id' header.");
+            System.out.println("missing id");
+            sendErrorFrame(frame.getHeaders(), "Missing 'id' header", "SUBSCRIBE frame must include an 'id' header.");
             return;
         }
         
-        connections.subscribe(connectionId, topic);
+        if (!connections.isSubscribed(connectionId, topic)) {
+            connections.subscribe(connectionId, id, topic);
+            String receipt = frame.getHeader("receipt");
+            if (receipt != null) {
+                sendReceiptFrame(receipt);
+            }   
+        } else {
+            System.out.println("already subscribed");
+            sendErrorFrame(frame.getHeaders(), "Already subscribed", "The user is already subscribed to said 'topic'.");
+        }
+    }
+
+    private void unsubscribe(StompFrame frame) {
+        System.out.println("in StompMessagingProtocolImpl: unsubscribe");
+        String id = frame.getHeader("id");
+
+        if (id == null) {
+            sendErrorFrame(frame.getHeaders(), "Missing 'id' header", "UNSUBSCRIBE frame must include an 'id' header");
+            return;
+        }
+
+        connections.unsubscribe(connectionId, id);
+        String receipt = frame.getHeader("receipt");
+        if (receipt != null) {
+            sendReceiptFrame(receipt);
+        }
     }
 
     private void send(StompFrame frame) {
@@ -81,26 +131,37 @@ public class StompMessagingProtocolImpl  implements StompMessagingProtocol<Stomp
         String body = frame.getBody();
 
         if (topic == null) {
-            sendErrorFrame("Missing 'destination' header", "SEND frame must include a 'destination' header.");
+            System.out.println("topic is null");
+            sendErrorFrame(frame.getHeaders(), "Missing 'destination' header", "SEND frame must include a 'destination' header.");
             return;
         }
         if (body == null || body.isEmpty()) {
-            sendErrorFrame("Missing message body", "SEND frame must include a non-empty body.");
+            System.out.println("body is empty");
+            sendErrorFrame(frame.getHeaders(), "Missing message body", "SEND frame must include a non-empty body.");
             return;
         }
 
-        connections.send(topic, frame);
+        if (connections.isSubscribed(connectionId, topic)) {
+            sendMessageFrame(topic, body);
+            String receipt = frame.getHeader("receipt");
+            if (receipt != null) {
+                sendReceiptFrame(receipt);
+            }
+        } else {
+            System.out.println("user not sunscribed");
+            sendErrorFrame(frame.getHeaders(), "User is not subscribed", "Only users who are subscribed to a 'topic' can send messages to all their subscribers.");
+        }
     }
 
     private void disconnect(StompFrame frame) {
         System.out.println("in StompMessagingProtocolImpl: disconnect");
         shouldTerminate = true;
         connections.disconnect(connectionId);
+        sendReceiptFrame(frame.getHeader("receipt"));
     }
 
-    private void sendErrorFrame(String errorMessage, String detailedMessage) {
+    private void sendErrorFrame(Map<String, String> headers,String errorMessage, String detailedMessage) {
         System.out.println("in StompMessagingProtocolImpl: sendErrorFrame");
-        Map<String, String> headers = new HashMap<>();
         headers.put("message", errorMessage);
 
         StompFrame errorFrame = new StompFrame(
@@ -108,13 +169,34 @@ public class StompMessagingProtocolImpl  implements StompMessagingProtocol<Stomp
             headers, 
             detailedMessage
         );
-        connections.send(connectionId, errorFrame);
         shouldTerminate = true;
+        connections.send(connectionId, errorFrame);
     }
 
-    @Override
-    public boolean shouldTerminate() {
-        //System.out.println("in StompMessagingProtocolImpl: shouldTerminate");
-        return shouldTerminate;
+    private void sendMessageFrame(String topic, String detailedMessage) {
+        System.out.println("in StompMessagingProtocolImpl: sendMessageFrame");
+        Map<String, String> headers = new ConcurrentHashMap<>();
+        headers.put("destination", topic);
+        headers.put("message-id", "" + messageIdCounter.getAndIncrement());
+
+        StompFrame messageFrame = new StompFrame(
+            "MESSAGE", 
+            headers, 
+            detailedMessage
+        );
+        connections.send(topic, messageFrame);
+    }
+
+    private void sendReceiptFrame(String receiptID) {
+        System.out.println("in StompMessagingProtocolImpl: sendReceiptFrame");
+        Map<String, String> headers = new ConcurrentHashMap<>();
+        headers.put("receipt-id", receiptID);
+
+        StompFrame recieptFrame = new StompFrame(
+            "RECEIPT", 
+            headers, 
+            null
+        );
+        connections.send(connectionId, recieptFrame);
     }
 }
