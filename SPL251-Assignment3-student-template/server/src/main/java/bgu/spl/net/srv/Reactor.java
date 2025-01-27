@@ -1,8 +1,8 @@
 package bgu.spl.net.srv;
 
 import bgu.spl.net.api.MessageEncoderDecoder;
-import bgu.spl.net.api.MessagingProtocol;
 import bgu.spl.net.api.StompMessagingProtocol;
+import bgu.spl.net.impl.stomp.StompFrame;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -14,13 +14,15 @@ import java.nio.channels.SocketChannel;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.function.Supplier;
 
-public class Reactor<T> implements Server<T> {
+public class Reactor implements Server {
 
     private final int port;
-    private final Supplier<StompMessagingProtocol<T>> protocolFactory;
-    private final Supplier<MessageEncoderDecoder<T>> readerFactory;
+    private final Supplier<StompMessagingProtocol<StompFrame>> protocolFactory;
+    private final Supplier<MessageEncoderDecoder<StompFrame>> readerFactory;
     private final ActorThreadPool pool;
     private Selector selector;
+
+    private final ConnectionsImpl connections;
 
     private Thread selectorThread;
     private final ConcurrentLinkedQueue<Runnable> selectorTasks = new ConcurrentLinkedQueue<>();
@@ -28,13 +30,14 @@ public class Reactor<T> implements Server<T> {
     public Reactor(
             int numThreads,
             int port,
-            Supplier<StompMessagingProtocol<T>> protocolFactory,
-            Supplier<MessageEncoderDecoder<T>> readerFactory) {
+            Supplier<StompMessagingProtocol<StompFrame>> protocolFactory,
+            Supplier<MessageEncoderDecoder<StompFrame>> readerFactory) {
 
         this.pool = new ActorThreadPool(numThreads);
         this.port = port;
         this.protocolFactory = protocolFactory;
         this.readerFactory = readerFactory;
+        this.connections = new ConnectionsImpl();
     }
 
     @Override
@@ -97,17 +100,23 @@ public class Reactor<T> implements Server<T> {
     private void handleAccept(ServerSocketChannel serverChan, Selector selector) throws IOException {
         SocketChannel clientChan = serverChan.accept();
         clientChan.configureBlocking(false);
-        final NonBlockingConnectionHandler<T> handler = new NonBlockingConnectionHandler<>(
+        StompMessagingProtocol<StompFrame> protocol = protocolFactory.get();
+        final NonBlockingConnectionHandler handler = new NonBlockingConnectionHandler(
                 readerFactory.get(),
-                protocolFactory.get(),
+                protocol,
                 clientChan,
                 this);
-        clientChan.register(selector, SelectionKey.OP_READ, handler);
+        int connectionId = connections.connect(handler);
+        pool.submit(protocol, () -> {
+            protocol.start(connectionId, connections);
+            handler.setInitialized();
+        });
+        SelectionKey key = clientChan.register(selector, SelectionKey.OP_READ, handler);
+        handler.setKey(key);
     }
 
     private void handleReadWrite(SelectionKey key) {
-        @SuppressWarnings("unchecked")
-        NonBlockingConnectionHandler<T> handler = (NonBlockingConnectionHandler<T>) key.attachment();
+        NonBlockingConnectionHandler handler = (NonBlockingConnectionHandler) key.attachment();
 
         if (key.isReadable()) {
             Runnable task = handler.continueRead();
