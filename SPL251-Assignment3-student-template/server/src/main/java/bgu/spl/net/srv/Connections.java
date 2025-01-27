@@ -1,6 +1,5 @@
 package bgu.spl.net.srv;
 
-import java.io.IOException;
 
 public interface Connections<T> {
 
@@ -8,7 +7,15 @@ public interface Connections<T> {
 
     void send(String channel, T msg);
 
-    void subscribe(int connectionId, String channel); //added
+    public int connect(ConnectionHandler<T> handler); //added
 
     void disconnect(int connectionId);
+
+    public boolean attemptLogin(String username, String password); //added
+
+    public void subscribe(int connectionId, String clientId, String topic); //added
+
+    public void unsubscribe(int connectionId, String clientId); //added
+
+    public boolean isSubscribed(int connectionId, String topic); //added
 }
