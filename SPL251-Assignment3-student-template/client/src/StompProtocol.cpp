@@ -2,7 +2,7 @@
 #include <iostream>
 #include <sstream>
 
-StompProtocol::StompProtocol(ConnectionHandler &handler) : subscriptions(), connectionHandler(handler), receiptCounter(0) {}
+StompProtocol::StompProtocol(ConnectionHandler &handler) : connectionHandler(handler), subscriptions(), receiptCounter(0) {}
 
 std::string StompProtocol::createConnectFrame(const std::string &host, const std::string &username, const std::string &password){
     return "CONNECT\n"
