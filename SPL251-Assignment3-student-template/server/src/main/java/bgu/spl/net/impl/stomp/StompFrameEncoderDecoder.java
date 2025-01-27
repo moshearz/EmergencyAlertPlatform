@@ -28,7 +28,7 @@ public class StompFrameEncoderDecoder implements MessageEncoderDecoder<StompFram
 
     @Override
     public byte[] encode(StompFrame message) {
-        return encodeFrame(message).getBytes(StandardCharsets.UTF_8);
+        return message.toString().getBytes(StandardCharsets.UTF_8);
     }
 
     private StompFrame decode(String rawFrame) {
@@ -50,9 +50,5 @@ public class StompFrameEncoderDecoder implements MessageEncoderDecoder<StompFram
         bodyPart = bodyPart.endsWith("\0") ? bodyPart.substring(0, bodyPart.length() - 1) : bodyPart;
 
         return new StompFrame(command, headers, bodyPart);
-    }
-
-    private String encodeFrame(StompFrame frame) {
-        return frame.toString();
     }
 }
