@@ -4,13 +4,16 @@
 
 StompProtocol::StompProtocol(ConnectionHandler &handler) : connectionHandler(handler), subscriptions(), receiptCounter(0) {}
 
-std::string StompProtocol::createConnectFrame(const std::string &host, const std::string &username, const std::string &password){
-    return "CONNECT\n"
-        "accept-version:1.2\n"
-        "host:" + host + "\n"
-        "login:" + username + "\n"
-        "passcode:" + password + "\n\n\0";
+std::string StompProtocol::createConnectFrame(const std::string &host, const std::string &username, const std::string &password) {
+    std::string frame = "CONNECT\n"
+                        "accept-version:1.2\n"
+                        "host:stomp.cs.bgu.ac.il\n"
+                        "login:" + username + "\n"
+                        "passcode:" + password + "\n\n\0";
+    std::cout << "DEBUG: Generated CONNECT frame:\n" << frame << std::endl;
+    return frame;
 }
+
 
 std::string StompProtocol::createSendFrame(const std::string &destination, const std::string &message)
 {

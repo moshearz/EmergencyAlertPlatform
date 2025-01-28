@@ -1,196 +1,163 @@
-#include <iostream> // Use for input and output 
-#include <thread>   // Provide support for multi-threading
-#include <string>   // Handle string manipulations
-#include <sstream>  // Used for parsing commands
-#include <mutex>    // Synchronizing access to shared data between threads
-#include "../include/ConnectionHandler.h" // Manages the network connection between the server and the client
-#include "../include/event.h" // Handles emergency events and their properties
-#include "../include/StompProtocol.h" // Processes STOMP protocol commands like CONNECT, SEND, and SUBSCRIBE
-#include <unordered_map> //for the map..
-#include <fstream> // for file operations
+#include <iostream>
+#include <ostream>
+#include <thread>
+#include <string>
+#include <sstream>
+#include <mutex>
+#include <unordered_map>
+#include <condition_variable>
+#include "../include/ConnectionHandler.h"
+#include "../include/event.h"
+#include "../include/StompProtocol.h"
+#include <fstream>
 
-
-int main(int argc, char *argv[]) {
-
-    //First, waiting for loggin command because we only process commands from logged-in users.
-    std::cout << "Waiting for login command, Structure: login {host:port} {username} {password}" << std::endl;
-
-    //Shared resources for threads 1,2
+int main(int argc, char* argv[]) {
     std::mutex mutex;
-    bool shouldTerminate = false; // flag to know when the program should exist
-    bool isLoggedIn = false; //flad to know if the user logged in
-    std::string loggedInUsername;  // for storing the username of the logged-in user
-    std::unordered_map<std::string, std::string> subscriptionMap; // stores the channel name as the key and the subscription ID as the value.
-    std::unordered_map<std::string, std::vector<Event>> eventsMap; //stores all events per channel
-
-    //shared resource for the commands that needs access to the channel ID and user name 
-
+    bool shouldTerminate = false;  // Flag to know when the program should terminate
+    bool isLoggedIn = false;       // Flag to check if the user is logged in
+    std::string loggedInUsername;
+    std::unordered_map<std::string, std::string> subscriptionMap;
+    std::unordered_map<std::string, std::vector<Event>> eventsMap;
+    std::condition_variable cv;
 
     ConnectionHandler* connectionhandler = nullptr;
     StompProtocol* stompProtocol = nullptr;
 
+    // Thread for server communication
+    std::thread serverCommunicationThread;
 
-    //Thread 1 - Server Communication 
-    //This thread should waits until user logged in, once it happaning this thread become active and starts listening for messages from the server
-    std::thread serverCommunicationThread([&stompProtocol, &connectionhandler, &shouldTerminate, &mutex, &isLoggedIn]() {
+    // Function to start the server communication thread
+    auto startServerCommunicationThread = [&]() {
+        if (serverCommunicationThread.joinable()) {
+            serverCommunicationThread.join();  // Ensure the previous thread is closed
+        }
 
-        while (!shouldTerminate) {
-            std::lock_guard<std::mutex> lock(mutex); // Lock the mutex
+        serverCommunicationThread = std::thread([&]() {
+            while (!shouldTerminate) {
+                try {
+                    std::string msg;
 
-            if (!isLoggedIn) { // If not logged in, wait and avoid busy waiting
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    // Wait for a connection handler to be ready
+                    {
+                        std::unique_lock<std::mutex> lock(mutex);
+                        cv.wait(lock, [&]() { return connectionhandler != nullptr || shouldTerminate; });
+                    }
+
+                    if (shouldTerminate) {
+                        break;
+                    }
+
+                    // Process messages from the server
+                    if (connectionhandler && connectionhandler->getLine(msg)) {
+                        std::cout << "DEBUG: Received message from server: " << msg << std::endl;
+
+                        if (msg.find("CONNECTED") == 0) {
+                            std::lock_guard<std::mutex> lock(mutex);
+                            isLoggedIn = true;
+                            std::cout << "Login successful." << std::endl;
+                        } else if (msg.find("ERROR") == 0) {
+                            std::cerr << "Server ERROR: " << msg << std::endl;
+                        } else if (msg.find("MESSAGE") == 0) {
+                            std::cout << "Server MESSAGE: " << msg << std::endl;
+                        } else if (msg.find("RECEIPT") == 0) {
+                            std::cout << "Server RECEIPT: " << msg << std::endl;
+                        } else {
+                            stompProtocol->processServerMessage(msg);
+                        }
+                    } else {
+                        std::cerr << "Connection to server lost." << std::endl;
+                        std::lock_guard<std::mutex> lock(mutex);
+                        isLoggedIn = false;
+                        cv.notify_all();
+                        break;  // Exit the thread if the connection is lost
+                    }
+                } catch (const std::exception& ex) {
+                    std::cerr << "Exception in server communication thread: " << ex.what() << std::endl;
+                    std::lock_guard<std::mutex> lock(mutex);
+                    shouldTerminate = true;
+                    cv.notify_all();
+                    break;
+                }
+            }
+
+            std::cout << "Server communication thread terminated." << std::endl;
+        });
+    };
+
+    // Start the server communication thread
+    startServerCommunicationThread();
+
+    // Main loop for handling user input
+    while (!shouldTerminate) {
+        std::string userInput;
+        std::getline(std::cin, userInput);
+
+        if (userInput.rfind("login ", 0) == 0) {
+            std::lock_guard<std::mutex> lock(mutex);
+
+            if (isLoggedIn) {
+                std::cerr << "You are already logged in. Please log out first." << std::endl;
                 continue;
             }
 
-            std::string msg;
-            if (!connectionhandler->getLine(msg)) { // Handle server communication
-                std::cerr << "Error receiving message from server. Exiting..." << std::endl;
-                shouldTerminate = true;
-                break;
+            std::istringstream userInputStream(userInput);
+            std::string command, hostPort, username, password;
+            userInputStream >> command >> hostPort >> username >> password;
+
+            auto colonPos = hostPort.find(':');
+            if (colonPos == std::string::npos) {
+                std::cerr << "Invalid login command. Usage: login <host:port> <username> <password>" << std::endl;
+                continue;
             }
 
-            std::cout << "Message from the server: " << msg << std::endl;
+            std::string host = hostPort.substr(0, colonPos);
+            int port = std::stoi(hostPort.substr(colonPos + 1));
 
-            stompProtocol->processServerMessage(msg); // Pass the message to the STOMP Protocol for processing
+            connectionhandler = new ConnectionHandler(host, port);
+            if (!connectionhandler->connect()) {
+                delete connectionhandler;
+                connectionhandler = nullptr;
+                std::cerr << "Could not connect to server." << std::endl;
+                continue;
+            }
+
+            stompProtocol = new StompProtocol(*connectionhandler);
+
+            std::string connectFrame = stompProtocol->createConnectFrame(host, username, password);
+            if (!connectionhandler->sendLine(connectFrame)) {
+                std::cerr << "Failed to send CONNECT frame to server." << std::endl;
+                delete connectionhandler;
+                delete stompProtocol;
+                connectionhandler = nullptr;
+                stompProtocol = nullptr;
+                continue;
+            }
+
+            loggedInUsername = username;
+            std::cout << "Login request sent to server." << std::endl;
+            cv.notify_all();
         }
-    });
 
-
-    //Thread 2 - Keyboard Thread
-    std::thread KeyboardThread([&stompProtocol, &connectionhandler, &shouldTerminate, &mutex, &isLoggedIn, &loggedInUsername, &subscriptionMap, &eventsMap]() {
-        
-        while(!shouldTerminate){
-
-            std::string userInput;
-            std::getline(std::cin, userInput); // waits for user input - we will use this input as classified all the commands
-
-            //Login command
-            if(userInput.rfind("login ", 0) == 0){
-
-                std::lock_guard<std::mutex> lock(mutex); //Locks the shared resources so that no other thread can access them while this command is being processed.
-
-                //Client already logged in
-                if (connectionhandler != nullptr) { // Check if the client is already logged in, we will return the connection handler to be nullptr after every 
-                    std::cerr << "The client is already logged in, log out before trying again" << std::endl;
-                    return; // using return for exiting the entire login command scope
-                }
-
-                //Parse the login command 
-                std::istringstream userInputStream(userInput);
-                std::string command, hostPort, username, pwd;
-                userInputStream >> command >> hostPort >> username >> pwd;
-
-                //handeling host&port "127.0.0.1:7777" (example for template)
-                auto colonPos = hostPort.find(':');
-                if (colonPos == std::string::npos) {
-                    std::cerr << "Invalid login command. Usage: login <host:port> <username> <password>" << std::endl;
-                    continue;}
-                std::string host = hostPort.substr(0, colonPos);
-                int port = std::stoi(hostPort.substr(colonPos + 1)); //std::stoi - Convert string to integer
-
-                //Connect to the server - Attempt
-                 connectionhandler = new ConnectionHandler(host, port); // the "connectionhandler" we created before as nullptr
-                 if(!connectionhandler->connect()){ // TCP Connection
-                    delete connectionhandler;
-                    connectionhandler = nullptr;
-                    std::cerr << "Could not connect to server " << std::endl;
-                    continue;
-                 }
-                 std::cerr << "Connected to server :) at " << host << ":" << port << std::endl;
-
-                // Initialize STOMP protocol
-                stompProtocol = new StompProtocol(*connectionhandler);
-
-                // Send CONNECT frame to the server 
-                std::string connectFrame = stompProtocol->createConnectFrame(host, username, pwd);
-                if (!connectionhandler->sendLine(connectFrame)) { // Send the CONNECT frame
-                    std::cerr << "Failed to send CONNECT frame to server." << std::endl;
-                    delete connectionhandler;
-                    delete stompProtocol;
-                    connectionhandler = nullptr;
-                    stompProtocol = nullptr;
-                    continue;
-                }
-
-                   // Wait for server response
-                std::string serverResponse;
-                auto startTime = std::chrono::steady_clock::now();
-                while (!connectionhandler->getLine(serverResponse)) {
-                    auto elapsedTime = std::chrono::steady_clock::now() - startTime;
-                    if (std::chrono::duration_cast<std::chrono::seconds>(elapsedTime).count() > 5) { // 5-second timeout
-                        std::cerr << "Timeout: No response from server after sending CONNECT frame." << std::endl;
-                        delete connectionhandler;
-                        delete stompProtocol;
-                        connectionhandler = nullptr;
-                        stompProtocol = nullptr;
-                        return;
-                    }
-                }
-
-                if (serverResponse.find("CONNECTED") == 0) {
-                    std::cout << "Login successful" << std::endl;
-                    isLoggedIn = true;
-                    loggedInUsername = username;
-                    continue;
-                } else if (serverResponse.find("ERROR") == 0) {
-                    std::cerr << "Error: " << serverResponse << std::endl;
-                    delete connectionhandler;
-                    delete stompProtocol;
-                    connectionhandler = nullptr;
-                    stompProtocol = nullptr;
-                    return;
-                }
-
+        else if (userInput.rfind("join ", 0) == 0) {
+            if (!isLoggedIn) {
+                std::cerr << "You must be logged in to join a channel." << std::endl;
+                continue;
             }
 
-            //join command
-            if(userInput.rfind("join ", 0) == 0){
-
-                std::lock_guard<std::mutex> lock(mutex);
-
-                if(!isLoggedIn){
-                    std::cerr << "User must be logged in before joining to channel. " << std::endl;
-                    continue;
-                }
-                
-                //Parse the channel name (in here we will use in substring instead of creating a stream because its short command and simple template)
-                std::string channel_name = userInput.substr(5); // join is 5 chatacters including the space. Structure: join {channel_name}
-                if(channel_name.empty()){
-                    std::cerr << "Invalid join command. Structure: join {channel_name}" << std::endl;
-                    continue;
-                }
-
-                //Create unique id for this specific subscription using counter. note to self: first id = 1
-                static int subscribeId = 1; // static int exists even after we finished the func/scope, and keeps on the data beetwen callings to the func.
-                std::string subscribeId_str = std::to_string(subscribeId++); //increment the value AFTER converting it to string 
-                subscriptionMap[channel_name] = subscribeId_str;
-                
-                // Create SUBSCRIBE Frame using StompProtocol
-                std::string subscribeFrame = stompProtocol->createSubscribeFrame(channel_name, subscribeId_str);
-
-                //send the subscribe frame to the server
-                if(!connectionhandler->sendLine(subscribeFrame)){
-                    std::cerr << "Failed to send SUBSCRIBE frame to the server from channel: " << channel_name << std::endl;
-                    continue;
-                }
-
-                // Wait for the RECEIPT frame from the server
-                std::string serverResponse;
-                if (!connectionhandler->getLine(serverResponse)) {
-                    std::cerr << "No response from server after sending SUBSCRIBE frame." << std::endl;
-                    continue;
-                }
-
-                // Check if the response is a RECEIPT frame
-                if(serverResponse.find("RECEIPT") == 0) {
-                    std::cout << "Joined channel " << channel_name << std::endl;
-                } else {
-                    std::cerr << "Unexpected response from server: " << serverResponse << std::endl;
-                }
+            std::string channelName = userInput.substr(5);
+            if (channelName.empty()) {
+                std::cerr << "Invalid join command. Usage: join <channel_name>" << std::endl;
+                continue;
             }
 
-            //exit command
-            if(userInput.rfind("exit ", 0) == 0){
+            static int subscriptionId = 1;
+            std::string subscriptionIdStr = std::to_string(subscriptionId++);
+            subscriptionMap[channelName] = subscriptionIdStr;
+
+            std::string subscribeFrame = stompProtocol->createSubscribeFrame(channelName, subscriptionIdStr);
+            connectionhandler->sendLine(subscribeFrame);
+        }
+        else if(userInput.rfind("exit ", 0) == 0){
 
                 std::lock_guard<std::mutex> lock(mutex);
                 if(!isLoggedIn){
@@ -221,62 +188,51 @@ int main(int argc, char *argv[]) {
                     continue;
                 }
 
-                // Wait for the RECEIPT frame from the server
-                std::string serverResponse;
-                if (!connectionhandler->getLine(serverResponse)) {
-                    std::cerr << "No response from server after sending UNSUBSCRIBE frame." << std::endl;
-                continue;
-                }
+        }
 
-                // Check if the response is a RECEIPT frame
-                if(serverResponse.find("RECEIPT") == 0) {
-                    std::cout << "Exited channel " << channel_name << std::endl;
-                    subscriptionMap.erase(channel_name);
-                } else {
-                    std::cerr << "Unexpected response from server: " << serverResponse << std::endl;
-                }
+        else if (userInput.rfind("report ", 0) == 0) {
+            if (!isLoggedIn) {
+            std::cerr << "You must be logged in to send a report." << std::endl;
+            continue;
+            }
+
+            std::string fileName = userInput.substr(7);
+            if (fileName.empty()) {
+                std::cerr << "Invalid report command. Usage: report <file_name>" << std::endl;
                 continue;
             }
 
-            //report command
-            if(userInput.rfind("report ", 0) == 0){
+            try {
+                names_and_events parsedData = parseEventsFile(fileName);
 
-                std::lock_guard<std::mutex> lock(mutex);
-                if(!isLoggedIn){
-                    std::cerr << "User must be logged in for sending a report... " << std::endl;
-                    continue;
+                for (const Event& event : parsedData.events) {
+                eventsMap[parsedData.channel_name].push_back(event);
+
+                std::ostringstream oss;
+                oss << "Event Name: " << event.get_name() << "\n"
+                    << "Description: " << event.get_description() << "\n"
+                    << "City: " << event.get_city() << "\n"
+                    << "Date Time: " << event.get_date_time() << "\n"
+                    << "General Information:\n";
+
+                for (const auto& [key, value] : event.get_general_information()) {
+                    oss << "  " << key << ": " << value << "\n";
                 }
 
-                //Extract the file name
-                std::string file_name = userInput.substr(7); //Structure: report {file}
-                if (file_name.empty()) {
-                    std::cerr << "Invalid report command. Usage: report {file}" << std::endl;
-                    continue;
-                }
-                //PARSE THE CHANNEL NAME AND EVENTS IT CONTAINS 
-                names_and_events parsedData_names_events;
-                parsedData_names_events = parseEventsFile(file_name); //returns a names_and_events object
-
-                //add the parsed events to eventsMap, we will use this is the "summary" command, when we need to create the report 
-                for(const Event& event : parsedData_names_events.events) eventsMap[parsedData_names_events.channel_name].push_back(event);
-
-                for (const Event& event : parsedData_names_events.events) { //create the send frame
-                    std::string sendFrame = "SEND\n"
-                                            "destination:/" + parsedData_names_events.channel_name + "\n"
-                                            "user:" + loggedInUsername + "\n"
-                                            "city:" + event.get_city() + "\n"
-                                            "event name:" + event.get_name() + "\n"
-                                            "date time:" + std::to_string(event.get_date_time()) + "\n"
-                                            "general information:\n"
-                                            "active:" + (event.get_general_information().at("active") == "true" ? "true" : "false") + "\n"
-                                            "forces_arrival_at_scene:" + (event.get_general_information().at("forces_arrival_at_scene") == "true" ? "true" : "false") + "\n"
-                                            "description:\n" + event.get_description() + "\n\n\0";
-                    connectionhandler->sendLine(sendFrame);
-                }
-                continue;
+                std::string serializedEvent = oss.str();
+                std::string sendFrame = stompProtocol->createSendFrame(parsedData.channel_name, serializedEvent);
+                connectionhandler->sendLine(sendFrame);
             }
 
-            if(userInput.rfind("summary ") == 0){
+            std::cout << "Report successfully sent for file: " << fileName << std::endl;
+            } catch (const std::exception& ex) {
+                std::cerr << "Failed to process report file '" << fileName << "': " << ex.what() << std::endl;
+            }
+        }
+
+
+
+        else if(userInput.rfind("summary ") == 0){
 
                 std::lock_guard<std::mutex> lock(mutex);
                 if(!isLoggedIn){
@@ -333,46 +289,43 @@ int main(int argc, char *argv[]) {
                 }
                 outFile.close();
                 continue;
-            }
-
-            if(userInput == "logout") {
-                std::lock_guard<std::mutex> lock(mutex);
-                if(!isLoggedIn){
-                    std::cout << "User must be logged in for log out haha..." << std::endl;
-                    continue;
-                }
-                std::string disconnectFrame = stompProtocol->createDisconnectFrame();
-                if(!connectionhandler->sendLine(disconnectFrame)) std::cerr << "Failed to send DISCONNECT frame to server." << std::endl;
-
-                std::string serverResponse;
-                if (!connectionhandler->getLine(serverResponse)) {
-                    std::cerr << "No response from server after sending DISCONNECT frame." << std::endl;
-                    continue;
-                }                   
-
-                // Check if the response is a RECEIPT frame
-                if (serverResponse.find("RECEIPT") == 0) {
-                std::cout << "Logout successful. Server acknowledged DISCONNECT." << std::endl;
-                } else {
-                    std::cerr << "Unexpected response from server: " << serverResponse << std::endl;
-                }
-
-                // Clean up resources and Reset maps and flags and the userr
-                delete connectionhandler;
-                delete stompProtocol;
-                connectionhandler = nullptr;
-                stompProtocol = nullptr;
-                isLoggedIn = false;
-                loggedInUsername.clear();
-                subscriptionMap.clear();
-                eventsMap.clear();
-            }
-
         }
-    });
 
-    KeyboardThread.join();
-    serverCommunicationThread.join();
-    std::cout << "Client terminated !. Please come back again :)" << std::endl;
+        else if (userInput == "logout") {
+            if (!isLoggedIn) {
+                std::cerr << "You must be logged in to log out." << std::endl;
+                continue;
+            }
+
+            std::string disconnectFrame = stompProtocol->createDisconnectFrame();
+            connectionhandler->sendLine(disconnectFrame);
+
+            delete connectionhandler;
+            delete stompProtocol;
+            connectionhandler = nullptr;
+            stompProtocol = nullptr;
+
+            isLoggedIn = false;
+            loggedInUsername.clear();
+            subscriptionMap.clear();
+            eventsMap.clear();
+
+            std::cout << "Logout successful. You can log in again." << std::endl;
+
+            // Restart the server communication thread for a new login session
+            startServerCommunicationThread();
+        }
+
+        else if (userInput == "exit") {
+            shouldTerminate = true;
+            cv.notify_all();
+        }
+    }
+
+    if (serverCommunicationThread.joinable()) {
+        serverCommunicationThread.join();
+    }
+
+    std::cout << "Client terminated. Goodbye!" << std::endl;
     return 0;
 }
