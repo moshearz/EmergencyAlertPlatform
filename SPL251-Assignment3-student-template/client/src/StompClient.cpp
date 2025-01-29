@@ -1,12 +1,12 @@
-#include <iostream>
-#include <ostream>
-#include <thread>
-#include <string>
-#include <sstream>
-#include <mutex>
-#include <unordered_map>
-#include <condition_variable>
-#include "../include/ConnectionHandler.h"
+#include <iostream> // Use for input and output 
+#include <ostream> 
+#include <thread> // Provide support for multi-threading
+#include <string> // Handle string manipulations
+#include <sstream> // Used for parsing commands
+#include <mutex>  // Synchronizing access to shared data between threads
+#include <unordered_map> // For storing data in key value format
+#include <condition_variable> //Coordinate beetween multiplie thread
+#include "../include/ConnectionHandler.h" 
 #include "../include/event.h"
 #include "../include/StompProtocol.h"
 #include <fstream>
@@ -16,18 +16,17 @@ int main(int argc, char* argv[]) {
     std::mutex mutex;
     bool shouldTerminate = false;  // Flag to know when the program should terminate
     bool isLoggedIn = false;       // Flag to check if the user is logged in
-    std::string loggedInUsername;
-    std::unordered_map<std::string, std::string> subscriptionMap;
-    std::unordered_map<std::string, std::vector<Event>> eventsMap;
-    std::condition_variable cv;
-
+    std::string loggedInUsername;   // for storing the username of the logged-in user
+    std::unordered_map<std::string, std::string> subscriptionMap; // stores the channel name as the key and the subscription ID as the value.
+    std::unordered_map<std::string, std::vector<Event>> eventsMap; //stores all events per channel
+    std::condition_variable cv; // Condition variable for signaling. makes the thread wait till it is notified by the other thread.
     ConnectionHandler* connectionhandler = nullptr;
     StompProtocol* stompProtocol = nullptr;
 
     // Thread for server communication
     std::thread serverCommunicationThread;
 
-    // Function to start the server communication thread
+    // (lambda) function to start/restart the server communication thread
     auto startServerCommunicationThread = [&]() {
         if (serverCommunicationThread.joinable()) {
             serverCommunicationThread.join();  // Ensure the previous thread is closed
@@ -38,15 +37,15 @@ int main(int argc, char* argv[]) {
                 try {
                     std::string msg;
 
-                    // Wait for a connection handler to be ready
+                    // Wait for a connection handler to be ready (valid) or shouldTerminate flag true
                     {
                         std::unique_lock<std::mutex> lock(mutex);
-                        std::cout << "DEBUG: Waiting on condition variable..." << std::endl;
+                        //std::cout << "DEBUG: Waiting on condition variable..." << std::endl;
                         cv.wait(lock, [&]() { 
-                            std::cout << "DEBUG: Condition evaluated." << std::endl;
+                            //std::cout << "DEBUG: Condition evaluated." << std::endl;
                             return connectionhandler != nullptr || shouldTerminate; 
                         });
-                        std::cout << "DEBUG: Condition met, proceeding..." << std::endl;
+                        //std::cout << "DEBUG: Condition met, proceeding..." << std::endl;
                     }
 
                     if (shouldTerminate) {
@@ -60,13 +59,13 @@ int main(int argc, char* argv[]) {
                         if (msg.find("CONNECTED") == 0) {
                             std::lock_guard<std::mutex> lock(mutex);
                             isLoggedIn = true;
-                            //std::cout << "Login successful." << std::endl;
+                            std::cout << "Login successful." << std::endl;
                         } else if (msg.find("ERROR") == 0) {
-                            //std::cerr << "Server ERROR: " << msg << std::endl;
+                            std::cerr << "Server ERROR: " << msg << std::endl;
                         } else if (msg.find("MESSAGE") == 0) {
-                            //std::cout << "Server MESSAGE: " << msg << std::endl;
+                            std::cout << "Server MESSAGE: " << msg << std::endl;
                         } else if (msg.find("RECEIPT") == 0) {
-                            //std::cout << "Server RECEIPT: " << msg << std::endl;
+                            std::cout << "Server RECEIPT: " << msg << std::endl;
                         }else {
                             stompProtocol->processServerMessage(msg);
                         }
@@ -74,7 +73,7 @@ int main(int argc, char* argv[]) {
                         std::cerr << "Connection to server lost." << std::endl;
                         //std::lock_guard<std::mutex> lock(mutex);
                         isLoggedIn = false;
-                        std::cout << "DEBUG: Notifying condition variable." << std::endl;
+                        //std::cout << "DEBUG: Notifying condition variable." << std::endl;
                         cv.notify_all();
                         break;  // Exit the thread if the connection is lost
                     }
@@ -82,13 +81,13 @@ int main(int argc, char* argv[]) {
                     std::cerr << "Exception in server communication thread: " << ex.what() << std::endl;
                     //std::lock_guard<std::mutex> lock(mutex);
                     shouldTerminate = true;
-                    std::cout << "DEBUG: Notifying condition variable." << std::endl;
+                    //std::cout << "DEBUG: Notifying condition variable." << std::endl;
                     cv.notify_all();
                     break;
                 }
             }
 
-            //std::cout << "Server communication thread terminated." << std::endl;
+            std::cout << "Server communication thread terminated." << std::endl;
         });
     };
 
@@ -107,11 +106,11 @@ int main(int argc, char* argv[]) {
                 std::cerr << "You are already logged in. Please log out first." << std::endl;
                 continue;
             }
-
+            //Parse the login command 
             std::istringstream userInputStream(userInput);
             std::string command, hostPort, username, password;
             userInputStream >> command >> hostPort >> username >> password;
-
+            //handeling host&port "127.0.0.1:7777" (example for template)
             auto colonPos = hostPort.find(':');
             if (colonPos == std::string::npos) {
                 std::cerr << "Invalid login command. Usage: login <host:port> <username> <password>" << std::endl;
@@ -119,10 +118,10 @@ int main(int argc, char* argv[]) {
             }
 
             std::string host = hostPort.substr(0, colonPos);
-            int port = std::stoi(hostPort.substr(colonPos + 1));
+            int port = std::stoi(hostPort.substr(colonPos + 1)); //std::stoi - Convert string to integer
 
-            connectionhandler = new ConnectionHandler(host, port);
-            if (!connectionhandler->connect()) {
+            connectionhandler = new ConnectionHandler(host, port);//For establish TCP Connection
+            if (!connectionhandler->connect()) { // if connecrtion fails clean up resurces 
                 delete connectionhandler;
                 connectionhandler = nullptr;
                 std::cerr << "Could not connect to server." << std::endl;
@@ -142,8 +141,8 @@ int main(int argc, char* argv[]) {
             }
 
             loggedInUsername = username;
-            //std::cout << "Login request sent to server." << std::endl;
-            std::cout << "DEBUG: Notifying condition variable." << std::endl;
+            std::cout << "Login request sent to server." << std::endl;
+            //std::cout << "DEBUG: Notifying condition variable." << std::endl;
             cv.notify_all();
         }
 
@@ -158,9 +157,9 @@ int main(int argc, char* argv[]) {
                 std::cerr << "Invalid join command. Usage: join <channel_name>" << std::endl;
                 continue;
             }
-
-            static int subscriptionId = 1;
-            std::string subscriptionIdStr = std::to_string(subscriptionId++);
+            //Create unique id for this specific subscription using counter
+            static int subscriptionId = 1;// static int exists even after we finished the func/scope, and keeps on the data beetwen callings to the func.
+            std::string subscriptionIdStr = std::to_string(subscriptionId++); //increment the value AFTER converting it to string
             subscriptionMap[channelName] = subscriptionIdStr;
 
             std::string subscribeFrame = stompProtocol->createSubscribeFrame(channelName, subscriptionIdStr);
@@ -192,10 +191,7 @@ int main(int argc, char* argv[]) {
                 std::string unsubscribeFrame = stompProtocol->createUnsubscribeFrame(it->second); //second accesses the subscription ID that associated with channel_name
 
                 //send the unsubscribe frame to the server
-                if(!connectionhandler->sendLine(unsubscribeFrame)){
-                    std::cerr << "Failed to send UNSUBSCRIBE frame to the server from channel: " << channel_name << std::endl;
-                    continue;
-                }
+                connectionhandler->sendLine(unsubscribeFrame);
 
         }
 
@@ -329,7 +325,7 @@ int main(int argc, char* argv[]) {
 
         else if (userInput == "exit") {
             shouldTerminate = true;
-            std::cout << "DEBUG: Notifying condition variable." << std::endl;
+            //std::cout << "DEBUG: Notifying condition variable." << std::endl;
             cv.notify_all();
         }
     }
