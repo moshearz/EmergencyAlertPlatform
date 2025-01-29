@@ -25,3 +25,5 @@ public:
     void processServerMessage(const std::string &message);
 
 };
+
+std::string epochToDate(int epoch);

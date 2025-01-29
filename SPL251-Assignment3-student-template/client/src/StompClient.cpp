@@ -10,6 +10,7 @@
 #include "../include/event.h"
 #include "../include/StompProtocol.h"
 #include <fstream>
+#include <iomanip>
 
 int main(int argc, char* argv[]) {
     std::mutex mutex;
@@ -40,7 +41,12 @@ int main(int argc, char* argv[]) {
                     // Wait for a connection handler to be ready
                     {
                         std::unique_lock<std::mutex> lock(mutex);
-                        cv.wait(lock, [&]() { return connectionhandler != nullptr || shouldTerminate; });
+                        std::cout << "DEBUG: Waiting on condition variable..." << std::endl;
+                        cv.wait(lock, [&]() { 
+                            std::cout << "DEBUG: Condition evaluated." << std::endl;
+                            return connectionhandler != nullptr || shouldTerminate; 
+                        });
+                        std::cout << "DEBUG: Condition met, proceeding..." << std::endl;
                     }
 
                     if (shouldTerminate) {
@@ -49,38 +55,40 @@ int main(int argc, char* argv[]) {
 
                     // Process messages from the server
                     if (connectionhandler && connectionhandler->getLine(msg)) {
-                        std::cout << "DEBUG: Received message from server: " << msg << std::endl;
+                        //std::cout << "DEBUG: Received message from server: " << msg << std::endl;
 
                         if (msg.find("CONNECTED") == 0) {
                             std::lock_guard<std::mutex> lock(mutex);
                             isLoggedIn = true;
-                            std::cout << "Login successful." << std::endl;
+                            //std::cout << "Login successful." << std::endl;
                         } else if (msg.find("ERROR") == 0) {
-                            std::cerr << "Server ERROR: " << msg << std::endl;
+                            //std::cerr << "Server ERROR: " << msg << std::endl;
                         } else if (msg.find("MESSAGE") == 0) {
-                            std::cout << "Server MESSAGE: " << msg << std::endl;
+                            //std::cout << "Server MESSAGE: " << msg << std::endl;
                         } else if (msg.find("RECEIPT") == 0) {
-                            std::cout << "Server RECEIPT: " << msg << std::endl;
-                        } else {
+                            //std::cout << "Server RECEIPT: " << msg << std::endl;
+                        }else {
                             stompProtocol->processServerMessage(msg);
                         }
                     } else {
                         std::cerr << "Connection to server lost." << std::endl;
-                        std::lock_guard<std::mutex> lock(mutex);
+                        //std::lock_guard<std::mutex> lock(mutex);
                         isLoggedIn = false;
+                        std::cout << "DEBUG: Notifying condition variable." << std::endl;
                         cv.notify_all();
                         break;  // Exit the thread if the connection is lost
                     }
                 } catch (const std::exception& ex) {
                     std::cerr << "Exception in server communication thread: " << ex.what() << std::endl;
-                    std::lock_guard<std::mutex> lock(mutex);
+                    //std::lock_guard<std::mutex> lock(mutex);
                     shouldTerminate = true;
+                    std::cout << "DEBUG: Notifying condition variable." << std::endl;
                     cv.notify_all();
                     break;
                 }
             }
 
-            std::cout << "Server communication thread terminated." << std::endl;
+            //std::cout << "Server communication thread terminated." << std::endl;
         });
     };
 
@@ -134,7 +142,8 @@ int main(int argc, char* argv[]) {
             }
 
             loggedInUsername = username;
-            std::cout << "Login request sent to server." << std::endl;
+            //std::cout << "Login request sent to server." << std::endl;
+            std::cout << "DEBUG: Notifying condition variable." << std::endl;
             cv.notify_all();
         }
 
@@ -192,8 +201,8 @@ int main(int argc, char* argv[]) {
 
         else if (userInput.rfind("report ", 0) == 0) {
             if (!isLoggedIn) {
-            std::cerr << "You must be logged in to send a report." << std::endl;
-            continue;
+                std::cerr << "You must be logged in to send a report." << std::endl;
+                continue;
             }
 
             std::string fileName = userInput.substr(7);
@@ -205,26 +214,27 @@ int main(int argc, char* argv[]) {
             try {
                 names_and_events parsedData = parseEventsFile(fileName);
 
-                for (const Event& event : parsedData.events) {
-                eventsMap[parsedData.channel_name].push_back(event);
+                for (Event& event : parsedData.events) {
+                    event.setEventOwnerUser(loggedInUsername);
+                    eventsMap[parsedData.channel_name].push_back(event);
 
-                std::ostringstream oss;
-                oss << "Event Name: " << event.get_name() << "\n"
-                    << "Description: " << event.get_description() << "\n"
-                    << "City: " << event.get_city() << "\n"
-                    << "Date Time: " << event.get_date_time() << "\n"
-                    << "General Information:\n";
+                    std::ostringstream oss;
+                    oss << "Event Name: " << event.get_name() << "\n"
+                        << "Description: " << event.get_description() << "\n"
+                        << "City: " << event.get_city() << "\n"
+                        << "Date Time: " << event.get_date_time() << "\n"
+                        << "General Information:\n";
 
-                for (const auto& [key, value] : event.get_general_information()) {
-                    oss << "  " << key << ": " << value << "\n";
+                    for (const auto& pair : event.get_general_information()) {
+                        oss << "  " << pair.first << ": " << pair.second << "\n";
+                    }
+
+                    std::string serializedEvent = oss.str();
+                    std::string sendFrame = stompProtocol->createSendFrame(parsedData.channel_name, serializedEvent);
+                    connectionhandler->sendLine(sendFrame);
                 }
 
-                std::string serializedEvent = oss.str();
-                std::string sendFrame = stompProtocol->createSendFrame(parsedData.channel_name, serializedEvent);
-                connectionhandler->sendLine(sendFrame);
-            }
-
-            std::cout << "Report successfully sent for file: " << fileName << std::endl;
+                //std::cout << "Report successfully sent for file: " << fileName << std::endl;
             } catch (const std::exception& ex) {
                 std::cerr << "Failed to process report file '" << fileName << "': " << ex.what() << std::endl;
             }
@@ -267,7 +277,8 @@ int main(int argc, char* argv[]) {
                 std::ofstream outFile(file_name); //open the file for writing
 
                 int totalReports = userEvents.size();
-                int counter_for_active, counter_for_forces_arrival_at_scene = 0;
+                int counter_for_active = 0;
+                int counter_for_forces_arrival_at_scene = 0;
                 for (const Event& event : userEvents){
                     if(event.get_general_information().at("active")=="true") counter_for_active++;
                     if(event.get_general_information().at("forces_arrival_at_scene")=="true") counter_for_forces_arrival_at_scene++;
@@ -283,7 +294,7 @@ int main(int argc, char* argv[]) {
                 for (const Event& event : userEvents){ // we sorted the events earlier so the first event will be asscieted to report 1 and so on... 
                     outFile << "Report_" << the_num_of_report++ << ":\n"; //Post add of the num of report
                     outFile << "city: " << event.get_city() << "\n";
-                    outFile << "date time: " << event.get_date_time() << "\n";
+                    outFile << "date time: " << epochToDate(event.get_date_time()) << "\n";
                     outFile << "event name: " << event.get_name() << "\n";
                     outFile << "summary: " << (event.get_description().length() > 27 ? event.get_description().substr(0, 27) + "..." : event.get_description()) << "\n";
                 }
@@ -318,6 +329,7 @@ int main(int argc, char* argv[]) {
 
         else if (userInput == "exit") {
             shouldTerminate = true;
+            std::cout << "DEBUG: Notifying condition variable." << std::endl;
             cv.notify_all();
         }
     }
@@ -328,4 +340,14 @@ int main(int argc, char* argv[]) {
 
     std::cout << "Client terminated. Goodbye!" << std::endl;
     return 0;
+}
+
+
+std::string epochToDate(int epoch) {
+    std::time_t time = epoch; // Convert to time_t
+    std::tm tm = *std::localtime(&time); // Convert to local time structure
+
+    std::ostringstream oss;
+    oss << std::put_time(&tm, "%d/%m/%y %H:%M"); // Format as "DD/MM/YY HH:MM"
+    return oss.str();
 }
