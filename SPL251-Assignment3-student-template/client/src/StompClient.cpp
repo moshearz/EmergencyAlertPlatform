@@ -18,7 +18,7 @@ int main(int argc, char* argv[]) {
     bool isLoggedIn = false;       // Flag to check if the user is logged in
     std::string loggedInUsername;   // for storing the username of the logged-in user
     std::unordered_map<std::string, std::string> subscriptionMap; // stores the channel name as the key and the subscription ID as the value.
-    std::unordered_map<std::string, std::vector<Event>> eventsMap; //stores all events per channel
+    std::unordered_map<std::string, std::unordered_map<std::string, std::vector<Event>>> eventsMap; //stores all events per channel
     std::condition_variable cv; // Condition variable for signaling. makes the thread wait till it is notified by the other thread.
     ConnectionHandler* connectionhandler = nullptr;
     StompProtocol* stompProtocol = nullptr;
@@ -40,12 +40,9 @@ int main(int argc, char* argv[]) {
                     // Wait for a connection handler to be ready (valid) or shouldTerminate flag true
                     {
                         std::unique_lock<std::mutex> lock(mutex);
-                        //std::cout << "DEBUG: Waiting on condition variable..." << std::endl;
                         cv.wait(lock, [&]() { 
-                            //std::cout << "DEBUG: Condition evaluated." << std::endl;
                             return connectionhandler != nullptr || shouldTerminate; 
                         });
-                        //std::cout << "DEBUG: Condition met, proceeding..." << std::endl;
                     }
 
                     if (shouldTerminate) {
@@ -54,8 +51,6 @@ int main(int argc, char* argv[]) {
 
                     // Process messages from the server
                     if (connectionhandler && connectionhandler->getLine(msg)) {
-                        //std::cout << "DEBUG: Received message from server: " << msg << std::endl;
-
                         if (msg.find("CONNECTED") == 0) {
                             std::lock_guard<std::mutex> lock(mutex);
                             isLoggedIn = true;
@@ -64,24 +59,23 @@ int main(int argc, char* argv[]) {
                             std::cerr << "Server ERROR: " << msg << std::endl;
                         } else if (msg.find("MESSAGE") == 0) {
                             std::cout << "Server MESSAGE: " << msg << std::endl;
+                            std::string body = msg.substr(msg.find("\n\n") + 2);
+                            Event e = Event(body);
+                            eventsMap[e.get_channel_name()][e.getEventOwnerUser()].push_back(e);
                         } else if (msg.find("RECEIPT") == 0) {
                             std::cout << "Server RECEIPT: " << msg << std::endl;
-                        }else {
+                        } else {
                             stompProtocol->processServerMessage(msg);
                         }
                     } else {
                         std::cerr << "Connection to server lost." << std::endl;
-                        //std::lock_guard<std::mutex> lock(mutex);
                         isLoggedIn = false;
-                        //std::cout << "DEBUG: Notifying condition variable." << std::endl;
                         cv.notify_all();
                         break;  // Exit the thread if the connection is lost
                     }
                 } catch (const std::exception& ex) {
                     std::cerr << "Exception in server communication thread: " << ex.what() << std::endl;
-                    //std::lock_guard<std::mutex> lock(mutex);
                     shouldTerminate = true;
-                    //std::cout << "DEBUG: Notifying condition variable." << std::endl;
                     cv.notify_all();
                     break;
                 }
@@ -142,7 +136,6 @@ int main(int argc, char* argv[]) {
 
             loggedInUsername = username;
             std::cout << "Login request sent to server." << std::endl;
-            //std::cout << "DEBUG: Notifying condition variable." << std::endl;
             cv.notify_all();
         }
 
@@ -212,14 +205,13 @@ int main(int argc, char* argv[]) {
 
                 for (Event& event : parsedData.events) {
                     event.setEventOwnerUser(loggedInUsername);
-                    eventsMap[parsedData.channel_name].push_back(event);
 
                     std::ostringstream oss;
-                    oss << "Event Name: " << event.get_name() << "\n"
-                        << "Description: " << event.get_description() << "\n"
-                        << "City: " << event.get_city() << "\n"
-                        << "Date Time: " << event.get_date_time() << "\n"
-                        << "General Information:\n";
+                    oss << "event name: " << event.get_name() << "\n"
+                        << "description: " << event.get_description() << "\n"
+                        << "city: " << event.get_city() << "\n"
+                        << "date time: " << event.get_date_time() << "\n"
+                        << "general information:\n";
 
                     for (const auto& pair : event.get_general_information()) {
                         oss << "  " << pair.first << ": " << pair.second << "\n";
@@ -229,8 +221,6 @@ int main(int argc, char* argv[]) {
                     std::string sendFrame = stompProtocol->createSendFrame(parsedData.channel_name, serializedEvent);
                     connectionhandler->sendLine(sendFrame);
                 }
-
-                //std::cout << "Report successfully sent for file: " << fileName << std::endl;
             } catch (const std::exception& ex) {
                 std::cerr << "Failed to process report file '" << fileName << "': " << ex.what() << std::endl;
             }
@@ -256,13 +246,7 @@ int main(int argc, char* argv[]) {
                     std::cerr << "No events found for channel: " << channel_name << std::endl;
                     continue;
                 }   
-                const std::vector<Event>& events = it->second; // all events of specified channel_name. note: type is: std::vector<Event>
-                std::vector<Event> userEvents; //for storing only the events of specific user
-
-                for (const Event& event : events){
-                    if(event.getEventOwnerUser() == user)
-                        userEvents.push_back(event); //add the cuur event to the userEvents vector
-                }
+                std::vector<Event> userEvents = eventsMap[channel_name][user]; //for storing only the events of specific user
 
                 // Sort events by date_time, then by event_name
                 std::sort(userEvents.begin(), userEvents.end(), [](const Event& a, const Event& b) {
@@ -275,9 +259,9 @@ int main(int argc, char* argv[]) {
                 int totalReports = userEvents.size();
                 int counter_for_active = 0;
                 int counter_for_forces_arrival_at_scene = 0;
-                for (const Event& event : userEvents){
-                    if(event.get_general_information().at("active")=="true") counter_for_active++;
-                    if(event.get_general_information().at("forces_arrival_at_scene")=="true") counter_for_forces_arrival_at_scene++;
+                for (const Event& event : userEvents) {
+                    if(event.get_general_information().find("active") != event.get_general_information().end() && event.get_general_information().at("active")=="true") counter_for_active++;
+                    if(event.get_general_information().find("forces_arrival_at_scene") != event.get_general_information().end() && event.get_general_information().at("forces_arrival_at_scene")=="true") counter_for_forces_arrival_at_scene++;
                 }
 
                 outFile << "Channel " << channel_name << "\n"; //write new headers or replace existing ones
@@ -325,7 +309,6 @@ int main(int argc, char* argv[]) {
 
         else if (userInput == "exit") {
             shouldTerminate = true;
-            //std::cout << "DEBUG: Notifying condition variable." << std::endl;
             cv.notify_all();
         }
     }

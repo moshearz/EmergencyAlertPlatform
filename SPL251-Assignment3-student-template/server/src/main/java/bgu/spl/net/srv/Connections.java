@@ -18,4 +18,6 @@ public interface Connections<T> {
     public void unsubscribe(int connectionId, String clientId); //added
 
     public boolean isSubscribed(int connectionId, String topic); //added
+    public boolean isOnline(String username); //added
+    public void login(String username, String password, int connectionId); //added
 }

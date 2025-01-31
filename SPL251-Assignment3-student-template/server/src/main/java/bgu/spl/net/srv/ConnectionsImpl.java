@@ -11,6 +11,8 @@ public class ConnectionsImpl implements Connections<StompFrame> {
     private final Map<Integer, ConnectionHandler<StompFrame>> activeConnections = new ConcurrentHashMap<>();
     private final Map<String, Map<Integer, String>> topicSubscribers = new ConcurrentHashMap<>(); //change set to map of server given id and client given id
     private final ConcurrentHashMap<String, String> registedClients = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Boolean> LoggedIn = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Integer, String> idToUsername = new ConcurrentHashMap<>();
     private final AtomicInteger idCounter = new AtomicInteger(1);
 
     @Override
@@ -47,15 +49,27 @@ public class ConnectionsImpl implements Connections<StompFrame> {
                 subscribers.remove(connectionId);
             });
             activeConnections.remove(connectionId).close();
+            if(idToUsername.contains((Integer)connectionId)){
+                LoggedIn.put(idToUsername.get((Integer)connectionId), false);
+                idToUsername.remove((Integer)connectionId);
+            }
         } catch (IOException ignore) {}
     }
-
+    @Override
+    public boolean isOnline(String username){
+        return LoggedIn.containsKey(username) && LoggedIn.get(username);
+    }
+    @Override
+    public void login(String username, String password, int connectionId){
+        LoggedIn.put(username, true);
+        idToUsername.put((Integer)connectionId, username);
+    }
     @Override
     public boolean attemptLogin(String username, String password) {
         if (!registedClients.containsKey(username)) {
             registedClients.put(username, password);
         }
-        return registedClients.get(username).matches(password);
+        return registedClients.get(username).equals(password);
     }
 
     @Override

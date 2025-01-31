@@ -10,7 +10,6 @@ std::string StompProtocol::createConnectFrame(const std::string &host, const std
                         "host:stomp.cs.bgu.ac.il\n"
                         "login:" + username + "\n"
                         "passcode:" + password + "\n\n\0";
-    std::cout << "DEBUG: Generated CONNECT frame:\n" << frame << std::endl;
     return frame;
 }
 
@@ -60,6 +59,7 @@ void StompProtocol::processServerMessage(const std::string &message)
     {
         // diagnosed msg from channel
         std::string body = message.substr(message.find("\n\n") + 2);//change the +2
+        
         std::cout << "New message received: " << body << std::endl;
     }
     else if (message.find("RECEIPT") != std::string::npos)

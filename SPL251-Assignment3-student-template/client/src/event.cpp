@@ -79,14 +79,15 @@ Event::Event(const std::string &frame_body): channel_name(""), city(""),
             string val;
             if(lineArgs.size() == 2) {
                 val = lineArgs.at(1);
+                val.erase(0, val.find_first_not_of(" "));
             }
             if(key == "user") {
                 eventOwnerUser = val;
             }
-            if(key == "channel name") {
+            else if(key == "channel name") {
                 channel_name = val;
             }
-            if(key == "city") {
+            else if(key == "city") {
                 city = val;
             }
             else if(key == "event name") {
@@ -100,14 +101,11 @@ Event::Event(const std::string &frame_body): channel_name(""), city(""),
                 continue;
             }
             else if(key == "description") {
-                while(getline(ss,line,'\n')) {
-                    eventDescription += line + "\n";
-                }
-                description = eventDescription;
+                description = val;
             }
 
             if(inGeneralInformation) {
-                general_information_from_string[key.substr(1)] = val;
+                general_information_from_string[key.substr(2)] = val;
             }
         }
     }

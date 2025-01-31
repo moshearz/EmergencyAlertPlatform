@@ -1,0 +1,29 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "cppdbg", // Use the official C++ debugging configuration
+            "request": "launch",
+            "name": "Debug StompEMIClient",
+            "program": "$/workspaces/EmergencyAlertPlatform/SPL251-Assignment3-student-template/client/bin/StompEMIClient", // Path to your executable
+            "args": [], // Arguments to pass to the program, if any
+            "stopAtEntry": false, // Do not stop at the entry point
+            "cwd": "$/workspaces/EmergencyAlertPlatform/SPL251-Assignment3-student-template/client/bin", // Set working directory to the workspace folder
+            "environment": [],
+            "externalConsole": true, // Opens an external console for input/output
+            "MIMode": "gdb", // Use GDB as the debugger
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ],
+            "preLaunchTask": "build", // Optional: Runs a build task before launching
+            "miDebuggerPath": "/usr/bin/gdb" // Path to GDB, adjust if needed
+        }
+    ]
+}

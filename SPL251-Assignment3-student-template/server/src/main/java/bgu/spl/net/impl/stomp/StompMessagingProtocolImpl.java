@@ -12,6 +12,7 @@ public class StompMessagingProtocolImpl  implements StompMessagingProtocol<Stomp
     private Connections<StompFrame> connections;
     private boolean shouldTerminate = false;
     private final AtomicInteger messageIdCounter = new AtomicInteger(1);
+    private String username = "";
 
 
     @Override
@@ -70,7 +71,13 @@ public class StompMessagingProtocolImpl  implements StompMessagingProtocol<Stomp
             connections.disconnect(connectionId);
             return;
         }
-
+        if (connections.isOnline(frame.getHeader("login"))) {
+            sendErrorFrame(frame.getHeaders(), "User already online", "Said username is already online.");
+            connections.disconnect(connectionId);
+            return;
+        }
+        username = frame.getHeader("login");
+        connections.login(frame.getHeader("login"), frame.getHeader("passcode"), connectionId);
         Map<String, String> headers = new ConcurrentHashMap<>();
         headers.put("version", "1.2");
         StompFrame response = new StompFrame(
@@ -178,7 +185,7 @@ public class StompMessagingProtocolImpl  implements StompMessagingProtocol<Stomp
         Map<String, String> headers = new ConcurrentHashMap<>();
         headers.put("destination", topic);
         headers.put("message-id", "" + messageIdCounter.getAndIncrement());
-
+        detailedMessage = "user: " + username + "\nchannel name: " + topic + "\n" + detailedMessage;
         StompFrame messageFrame = new StompFrame(
             "MESSAGE", 
             headers, 
